@@ -1,0 +1,1107 @@
+---
+title: "Attribution_Model_Project"
+output: html_document
+date: "2024-02-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE)
+
+### Set Work directory for the project
+### Hree you  put the location of the CustomerAttribution dataset in your local machine
+
+setwd("D:/Documents/R scripts/Project")
+
+
+
+
+# Tidyverse for data manipulation and visualization
+if (!require("tidyverse")) install.packages("tidyverse")
+library(tidyverse)
+
+# Tidyr for data manipulation and visualization
+if (!require("tidyr")) install.packages("tidyr")
+library(tidyverse)
+
+# Readr for reading files
+if (!require("readr")) install.packages("readr")
+library(tidyverse)
+
+# Lubridate for date and time manipulation
+if (!require("lubridate")) install.packages("lubridate")
+library(lubridate)
+
+# Rio for easy data import/export
+if (!require("rio")) install.packages("rio")
+library(rio)
+
+# ggplot2 for data visualization (included in tidyverse)
+ if (!require("ggplot2")) install.packages("ggplot2") # Not needed due to tidyverse
+
+# Patchwork for arranging ggplot2 plots
+if (!require("patchwork")) install.packages("patchwork")
+library(patchwork)
+
+# gridExtra for arranging plots
+if (!require("gridExtra")) install.packages("gridExtra")
+library(gridExtra)
+
+# knitr for dynamic report generation
+if (!require("knitr")) install.packages("knitr")
+library(knitr)
+
+# grid for lower-level graphics operations
+if (!require("grid")) install.packages("grid")
+library(grid)
+
+# ChannelAttribution for marketing channel attribution modeling
+if (!require("ChannelAttribution")) install.packages("ChannelAttribution")
+library(ChannelAttribution)
+```
+
+## Introduction
+
+
+In the digital age, businesses invest significantly in online marketing to attract, engage, and convert their target audience. With a plethora of channels available—from social media and search engine optimization (SEO) to email marketing and online ads—determining the real impact of each channel on revenue generation becomes crucial yet complex. This challenge underlines the need for sophisticated attribution modeling to allocate credit accurately among the myriad touchpoints a customer encounters on their journey to conversion.
+
+**Project Objective**: Our primary task is to develop an attribution model that dissects the contribution of each marketing channel to revenue generation. By analyzing customer interactions across different touchpoints, we aim to attribute revenue accurately among the channels, offering the client insights into optimizing their marketing mix for enhanced ROI.
+
+**Data Overview**: At our disposal is a prepared dataset capturing various customer interactions. It includes:
+
+**CustomerID**: A unique identifier for each user.
+
+**SessionID**: A unique identifier for each browsing session.
+
+**Timestamp_Touchpoint**: The timestamp of each marketing touchpoint.
+
+**Marketing_Channel**: The channel through which the touchpoint occurred.
+
+**Revenue**: The revenue attributed to conversions at each touchpoint.
+
+
+## Methodology Rationale:
+
+The choice of an attribution model is critical and will be guided by both the data's nature and the marketing landscape's complexity. We will explore different modeling approaches, assessing their fit for our dataset and their ability to provide actionable insights. Our selection process, analysis, and conclusions will be grounded in current best practices and literature in the field of marketing analytics.
+
+Since each attribution model has it's use and benefits we decided to use 5 models and see if we can gain insights using and combining these models. In this process we will go model by model commenting the results and in the end we will give our conclusion
+
+## Short Explanation of attribution models used
+
+**First-Touch Attribution**
+Definition: This model gives all the credit for the conversion to the first touchpoint that a customer interacts with. It emphasizes the importance of the initial engagement in attracting potential customers.
+
+**Last-Touch Attribution**
+Definition: Contrary to the First-Touch model, the Last-Touch attribution gives all the credit to the last touchpoint before conversion. It highlights the final decision-making or purchase-influencing channel.
+
+**Linear Attribution**
+Definition: The Linear model equally distributes credit for a conversion across all touchpoints in the customer journey. It assumes that each interaction contributes equally to the decision to convert.
+
+**U-Shaped (Position-Based) Attribution**
+Definition: The U-Shaped model assigns more credit to two key touchpoints: the first interaction and the conversion event, typically splitting 40% of the credit to each of these points and distributing the remaining 20% among other touchpoints.
+
+**Markov Chain Attribution**
+Definition: This model uses a probabilistic approach, analyzing the likelihood of conversion given the removal of a specific touchpoint from the chain. It's based on the Markov Chain theory, which studies the effects of different states (in this case, touchpoints) on a final outcome.
+
+
+
+```{r }
+### Read the CSV file into a dataframe
+# This code assumes the CSV file 'Customerattributiondata 2.csv' is located in the current working directory. 
+# It uses read_csv from the readr package, specifying that the column names will be provided manually.
+df <- read_csv("Customerattributiondata 2.csv", col_names = c("x1"))
+
+### Clean and structure the dataset
+# This block takes the single-column dataframe and separates it into multiple columns based on a tab ("\t") delimiter.
+# It then cleans the data by removing the first row if necessary (slice(-1) is used here for demonstration; adjust as needed).
+# The TIMESTAMP_TOUCHPOINT column is converted to datetime using lubridate's ymd_hms function.
+# MARKETINGCHANNEL is converted to a factor to facilitate categorical analysis and plotting.
+# REVENUE is converted from a character/string type to numeric for analysis.
+df <- df %>%
+  separate(data = ., col = x1, into = c("CUSTOMERID", "SESSIONID", "TIMESTAMP_TOUCHPOINT", "MARKETINGCHANNEL", "REVENUE"), sep = "\t") %>%
+  slice(-1) %>%
+  mutate(TIMESTAMP_TOUCHPOINT = ymd_hms(TIMESTAMP_TOUCHPOINT),
+         MARKETINGCHANNEL = as.factor(MARKETINGCHANNEL),
+         REVENUE = as.numeric(REVENUE))
+
+### Enhance the dataset with a conversion indicator
+# This code adds a new column, 'Conversion', to the dataset, where each entry is marked as 1 (indicating a conversion/revenue generation)
+# if the REVENUE is greater than 0, and 0 otherwise. This binary indicator is useful for analyses focused on conversion rates.
+df$Conversion <- ifelse(df$REVENUE > 0, 1, 0)
+
+### Display the prepared dataset
+# This line outputs the dataframe, allowing for a quick inspection of the transformations applied.
+df
+
+
+
+```
+
+## Exploratory Data Analysis
+
+In order for us to understand the what lies behind the data we first explore our dataset.
+
+First we generate the total number of clicks generated by marketing channel and the clicks converted ( the clicks that bought a product), in order to understand which channel generates more clicks and from which channels do the Sales come from.
+
+
+
+```{r , echo=FALSE,figures-side, fig.show="hold", out.width="50%"}
+
+### Calculate total clicks that resulted in conversion and total clicks for each marketing channel
+plot <- df[!is.na(df$REVENUE),] %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(Total_Clicks_Converted = n()) %>%
+  ungroup() %>%
+  left_join(df %>%
+              group_by(MARKETINGCHANNEL) %>%
+              summarise(Total_Clicks = n()) %>%
+              ungroup(),
+            by = "MARKETINGCHANNEL")
+
+### Define custom colors for different marketing channels for consistent visual representation
+colors <- c("Direct_NON-BRAND" = "#1f77b4", "SEO_BRAND" = "#ff7f0e", "Referral" = "#2ca02c", 
+            "SEO_NON-BRAND" = "#d62728", "Adwords/" = "#9467bd", 
+            "Social Media organic_NON-BRAND" = "#8c564b", "Referral_NON-BRAND" = "red")
+
+### Reshape the data to long format for easier plotting of both total clicks and total clicks converted
+df_long <- tidyr::pivot_longer(plot, cols = starts_with("Total"), names_to = "Frequency", values_to = "Count")
+
+### Summarize data to reorder marketing channels based on their activity (clicks and conversions)
+df_summary <- df_long %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(data = sum(Count)) %>%
+  arrange(desc(data)) %>%
+  pull(MARKETINGCHANNEL)
+
+### Update factor levels for MARKETINGCHANNEL and Frequency to ensure proper ordering and distinction in the plot
+df_long$MARKETINGCHANNEL <- factor(df_long$MARKETINGCHANNEL, levels = df_summary)
+df_long$Frequency <- factor(df_long$Frequency, levels = c("Total_Clicks", "Total_Clicks_Converted"))
+
+### Plot a grouped bar chart comparing total clicks vs. clicks converted for each marketing channel
+ggplot(df_long, aes(x = MARKETINGCHANNEL, y = Count, fill = Frequency)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Count), vjust = -0.5, size = 3) +
+  labs(title = "Marketing Channel Frequencies", x = "Marketing Channel", y = "Count") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+### Calculate the ratio of conversion (clicks resulting in revenue) for channels with significant activity
+result <- df %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(freq = n(), freq1 = sum(!is.na(REVENUE))) %>%
+  ungroup() %>%
+  mutate(ratio = freq1 / freq) %>%
+  filter(freq > 1000)
+
+### Visualize the proportion of clicks that convert by marketing channel using a pie chart
+ggplot(result, aes(x = "", y = ratio, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(ratio * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Proportion of Clicks by Marketing Channel")
+```
+In the plot on the left above we have the number  of clicks by marketing channel and the number of clicks which generated revenue by marketing channel.
+By the chart we see clearly that marketing channels that generate most clicks are **Direct Non Brand** and **Seo Brand**.
+
+But how many of those clicks are converted into sales ?
+
+In the right plot above we observe that  we observe that in average the percentage of clicks converted by marketing channel **8.5% to 9.00%**.
+So we find out that there is no real difference in the the percentage of clicks converted to revenue by marketing channel.
+
+**But what about the revenue. Do all marketing channels generate the same revenue ?**
+
+
+In the left plot below we calculated the sum of revenue by marketing channel.
+In the right plot we calculated the percentage of revenue in total revenu by marketing channel.
+
+What we observe in this charts is the huge impact of two marketing channels into revenue.
+**39.23%** of revenue comes from clicks of **Direct non-brand**.
+**32.05%** of revenue comes from clicks of Seo Brand, which in total around **71% of revenue** is generated by two marketing Channel which is significant
+
+
+
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+### Prepare dataset by summarizing total revenue per marketing channel and arranging channels based on total revenue
+df_summary <- df %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(total_revenue = sum(REVENUE, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(desc(total_revenue)) %>%
+  pull(MARKETINGCHANNEL)
+
+### Update marketing channel factor levels in the dataset based on total revenue ordering
+df$MARKETINGCHANNEL <- factor(df$MARKETINGCHANNEL, levels = df_summary)
+
+### Generate a bar plot visualizing total revenue by marketing channel
+plot_1 <- df %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(total_revenue = sum(REVENUE, na.rm = TRUE)) %>%
+  ungroup() %>%
+  ggplot(aes(x = MARKETINGCHANNEL, y = total_revenue, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = total_revenue), vjust = -0.5, size = 3) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Revenue by Marketing Channel")
+
+### Calculate the ratio of conversion through different marketing channels, focusing on channels with significant impact
+result <- df %>%
+  mutate(total = sum(REVENUE, na.rm = TRUE)) %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(ratio = sum(REVENUE, na.rm = TRUE) / total) %>%
+  distinct(MARKETINGCHANNEL, ratio) %>%
+  filter(ratio > 0.1)
+
+### Create a pie chart to visualize the distribution of revenue by marketing channel, highlighting significant channels
+plot_2 <- ggplot(result, aes(x = "", y = ratio, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "right") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(round(ratio * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Revenue By Marketing Channel Distribution")
+
+### Arrange the bar plot and pie chart side by side for comprehensive visualization
+grid.arrange(plot_1, plot_2, ncol = 2)
+
+```
+
+
+### First Touchpoint Attribution Model
+
+First touch attribution, also referred to as “first interaction” or “first-click,” is a type of marketing attribution model which gives 100% of a conversion’s credit to the first touch or visit that occurred right before the eventual conversion.
+
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+# Arrange the dataframe by customer ID and touchpoint timestamp for chronological analysis
+df_ordered <- df %>%
+  arrange(CUSTOMERID, TIMESTAMP_TOUCHPOINT)
+
+# Extract the first marketing channel encountered by each customer
+df_first_channel <- df_ordered %>%
+  group_by(CUSTOMERID) %>%
+  mutate(rank = row_number()) %>%
+  filter(min(rank) == rank) %>%
+  select(CUSTOMERID, MARKETINGCHANNEL) %>%
+  ungroup() %>%
+  rename(MARKETINGCHANNEL_FIRST = MARKETINGCHANNEL)
+
+# Extract the last marketing channel encountered by each customer
+df_last_channel <- df_ordered %>%
+  group_by(CUSTOMERID) %>%
+  mutate(rank = row_number()) %>%
+  filter(max(rank) == rank) %>%
+  select(CUSTOMERID, MARKETINGCHANNEL) %>%
+  ungroup() %>%
+  rename(MARKETINGCHANNEL_LAST = MARKETINGCHANNEL)
+
+# Combine the original dataframe with the first and last marketing channel data
+df_first_channel_combined <- df %>% left_join(df_first_channel, by = "CUSTOMERID")
+df_last_channel_combined <- df %>% left_join(df_last_channel, by = "CUSTOMERID")
+
+# Calculate revenue and clicks by the first marketing channel, and filter channels generating over $1000
+df_first_channel_revenue <- df_first_channel_combined %>%
+  group_by(MARKETINGCHANNEL_FIRST) %>%
+  summarise(total = sum(REVENUE, na.rm = TRUE)) %>%
+  mutate(percentage = total / sum(total)) %>%
+  ungroup() %>%
+  filter(total > 1000)
+
+df_first_channel_clicks <- df_first_channel_combined %>%
+  group_by(MARKETINGCHANNEL_FIRST) %>%
+  summarise(total = sum(Conversion, na.rm = TRUE)) %>%
+  mutate(percentage = total / sum(total)) %>%
+  ungroup()%>%filter(total>1)
+
+# Plot total revenue by first marketing channel
+plot_1 <- ggplot(df_first_channel_revenue, aes(x = MARKETINGCHANNEL_FIRST, y = total, fill = MARKETINGCHANNEL_FIRST)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  scale_y_continuous(labels = scales::comma) +
+  geom_text(aes(label = total), position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Total Revenue by Marketing Channel", x = "Marketing Channel", y = "Total Revenue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot proportion of revenue by first marketing channel in a pie chart
+plot_2 <- ggplot(df_first_channel_revenue, aes(x = "", y = percentage, fill = MARKETINGCHANNEL_FIRST)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Revenue Proportion by Marketing Channel")
+
+# Plot total clicks by first marketing channel
+plot_3 <- ggplot(df_first_channel_clicks, aes(x = MARKETINGCHANNEL_FIRST, y = total, fill = MARKETINGCHANNEL_FIRST)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  scale_y_continuous(labels = scales::comma) +
+  geom_text(aes(label = total), position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Total Clicks by Marketing Channel", x = "Marketing Channel", y = "Total Clicks") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot proportion of clicks by first marketing channel in a pie chart
+plot_4 <- ggplot(df_first_channel_clicks, aes(x = "", y = percentage, fill = MARKETINGCHANNEL_FIRST)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Clicks Proportion by Marketing Channel")
+
+# Arrange the first two plots side by side for comparison
+grid.arrange(plot_1, plot_2, ncol = 2)
+
+
+```
+
+
+
+**Direct_NON-BRAND**: This channel refers to direct visits to the website where customers land directly without using any specific brand-related keywords. It generated a total revenue of 434,000, which represents a substantial 38.00% of the overall revenue. This indicates a significant portion of revenue is driven by customers who directly visit the website, possibly through bookmarks or typing the URL directly into their browser.
+
+**SEO_BRAND**: SEO_BRAND refers to organic search traffic where customers find the website by searching for brand-related keywords. This channel contributed $85,000 in revenue, accounting for 33.71% of the total revenue. This suggests that the website's visibility and ranking for brand-related keywords in search engines play a crucial role in driving revenue.
+
+**Referral**: Referral traffic comes from external sources such as other websites, social media platforms, or online forums. It generated 188,000 in revenue, making up 16.46% of the total revenue. This indicates that partnerships, collaborations, or positive mentions on other platforms are effective in driving traffic and revenue to the website.
+
+**SEO_NON-BRAND**: This channel refers to organic search traffic where customers find the website by searching for non-brand-related keywords. It contributed 134,000 in revenue, representing 11.73% of the total revenue. This suggests that the website's visibility and ranking for non-brand-related keywords in search engines also play a role in driving revenue, albeit to a lesser extent compared to brand-related keywords.
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+grid.arrange(plot_3,plot_4,ncol=2)
+
+```
+
+**Direct_NON-BRAND** (434): This indicates that a significant portion of conversions comes from direct visits to the website without prior brand-specific searches. It suggests that customers are directly navigating to the website, possibly through bookmarks or typing the URL directly.
+
+**SEO_BRAND **(385): This suggests that a considerable number of conversions are initiated through organic search results specifically related to branded terms. It signifies strong brand awareness and potentially effective search engine optimization efforts targeting branded keywords.
+
+**Referral **(188): Referral traffic indicates that a notable portion of conversions originates from referrals from other websites. This could indicate successful partnerships, word-of-mouth marketing, or referral programs driving traffic to the site.
+
+**SEO_NON-BRAND **(134): This category signifies conversions originating from organic search results but without specific brand-related keywords. It implies successful optimization for generic or non-branded search terms, showcasing a broader reach and potentially attracting new customers.
+
+
+### Last Touchpoint Attrbituion Model
+
+The Last Touchpoint (or Last Click) Attribution Model is a straightforward and widely used approach in marketing analytics for assigning credit for conversions. In this model, all the credit for a conversion is given to the last interaction that a potential customer had with your brand before taking a desired action, such as making a purchase, signing up for a newsletter, or another conversion goal. This model operates under the assumption that the final touchpoint in the customer journey is the most critical in influencing the decision to convert.
+
+
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+# Calculate total revenue by the last marketing channel, applying a filter for channels generating over $1000
+df_last_channel_revenue <- df_last_channel_combined %>%
+  group_by(MARKETINGCHANNEL_LAST) %>%
+  summarise(total = sum(REVENUE, na.rm = TRUE)) %>%
+  mutate(percentage = total / sum(total)) %>%
+  ungroup() %>%
+  filter(total > 1000)
+
+# Calculate total conversions (clicks) by the last marketing channel
+df_last_channel_clicks <- df_last_channel_combined %>%
+  group_by(MARKETINGCHANNEL_LAST) %>%
+  summarise(total = sum(Conversion, na.rm = TRUE)) %>%
+  mutate(percentage = total / sum(total)) %>%
+  ungroup()%>%filter(total>1)
+
+
+# Plot the total revenue by the last marketing channel
+plot_1 <- ggplot(df_last_channel_revenue, aes(x = MARKETINGCHANNEL_LAST, y = total, fill = MARKETINGCHANNEL_LAST)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  geom_text(aes(label = total), position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Total Revenue by Marketing Channel", x = "Marketing Channel", y = "Total Revenue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot the proportion of total revenue by the last marketing channel in a pie chart
+plot_2 <- ggplot(df_last_channel_revenue, aes(x = "", y = percentage, fill = MARKETINGCHANNEL_LAST)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Revenue Proportion by Marketing Channel")
+
+# Arrange the two plots side by side for comparative visualization
+grid.arrange(plot_1, plot_2, ncol = 2)
+
+```
+**Direct_NON-BRAND** (454,000): This indicates that a significant portion of conversions is attributed to direct visits to the website without prior brand-specific searches. In a last-touchpoint model, this suggests that customers are often directly navigating to the website just before converting, indicating strong brand recall or possibly direct response to marketing efforts.
+
+**SEO_BRAND** (357,000): This category suggests that a substantial number of conversions are attributed to organic search results specifically related to branded terms. It reflects the effectiveness of branded SEO efforts in driving customers to the website shortly before conversion.
+
+**Referral (187,000)**: Referral traffic indicates that a notable portion of conversions is attributed to referrals from other websites. In a last-touchpoint model, this implies that customers are frequently referred from other sources just before converting, highlighting the importance of partnerships, word-of-mouth, or referral programs in driving conversions.
+
+**SEO_NON-BRAND** (139,000): This category signifies conversions attributed to organic search results without specific brand-related keywords. It suggests that non-branded SEO efforts also play a significant role in driving conversions in the final stages of the customer journey.
+
+**Adwords/ **(3,000): This indicates that a small portion of conversions is attributed to AdWords campaigns. While relatively minor compared to other channels, it suggests that AdWords still contributes to conversions in the last stages of the customer journey.
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+# Plot the total conversions by the last marketing channel
+plot_3 <- ggplot(df_last_channel_clicks, aes(x = MARKETINGCHANNEL_LAST, y = total, fill = MARKETINGCHANNEL_LAST)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  geom_text(aes(label = total), position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Total Conversions by Marketing Channel", x = "Marketing Channel", y = "Total Conversions") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot the proportion of total conversions by the last marketing channel in a pie chart
+plot_4 <- ggplot(df_last_channel_clicks, aes(x = "", y = percentage, fill = MARKETINGCHANNEL_LAST)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Conversion Proportion by Marketing Channel")
+
+# Arrange the two plots side by side for comparative visualization
+grid.arrange(plot_3, plot_4, ncol = 2)
+
+```
+
+
+**Direct_NON-BRAND** (454): This suggests that a substantial portion of conversions is attributed to direct visits to the website without prior brand-specific searches. Customers are directly navigating to the website just before converting, indicating strong brand recall or direct response to marketing efforts.
+
+**SEO_BRAND** (357): A significant number of conversions are attributed to organic search results specifically related to branded terms. This reflects the effectiveness of branded SEO efforts in driving customers to the website shortly before conversion.
+
+**Referral** (187): Referral traffic indicates that a notable portion of conversions is attributed to referrals from other websites. Customers are frequently referred from other sources just before converting, highlighting the importance of partnerships, word-of-mouth, or referral programs in driving conversions.
+
+**SEO_NON-BRAND** (139): Conversions attributed to organic search results without specific brand-related keywords suggest that non-branded SEO efforts also play a significant role in driving conversions in the final stages of the customer journey.
+
+**Referral_NON-BRAND** (1): Indicates that there is at least one conversion attributed to a referral source without brand-specific context. Further analysis may be needed to understand the nature and effectiveness of such referrals.
+
+
+
+### Linear Attribution Model
+
+**The Linear Attribution Model** is a method used in marketing to attribute credit for conversions (such as sales or leads) across all touchpoints in the customer journey. Unlike other attribution models that assign credit to just one interaction (e.g., the first or last touchpoint), the linear model distributes the credit equally across all touchpoints. This approach recognizes that each interaction, from initial awareness through to the final decision, plays a role in influencing the customer's decision to convert.
+
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+# Filter out customers who have made a purchase
+df_customers <- df %>% filter(!is.na(REVENUE)) %>% select(CUSTOMERID)
+
+# Prepare the data for linear attribution by filtering for customers who made a purchase,
+# arranging by customer ID and touchpoint timestamp, and assigning a rank to each touchpoint
+df_linear <- df %>%
+  filter(CUSTOMERID %in% df_customers$CUSTOMERID) %>%
+  group_by(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>%
+  arrange(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>%
+  ungroup() %>%
+  group_by(CUSTOMERID) %>%
+  mutate(RANK = row_number())
+
+# Calculate the participation of each touchpoint in the conversion process,
+# dividing the credit equally among all touchpoints for a given customer
+linear_data <- df_linear %>%
+  group_by(CUSTOMERID) %>%
+  mutate(order_participation = 1 / n()) %>%
+  ungroup() %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(orders = sum(order_participation)) %>%
+  collect() %>%
+  mutate(percentage = orders / sum(orders))%>%filter(orders>10)
+
+
+
+# Calculate the revenue attributed to each marketing channel based on linear attribution,
+# dividing the total revenue by the number of touchpoints for a given purchase
+linear_data_revenue <- df_linear %>%
+  group_by(CUSTOMERID) %>%
+  mutate(order_participation = sum(REVENUE, na.rm = TRUE) / n()) %>%
+  ungroup() %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(orders = sum(order_participation, na.rm = TRUE)) %>%
+  collect() %>%
+  mutate(percentage = orders / sum(orders))%>%filter(orders>1000)
+
+
+```
+
+
+
+```{r echo=FALSE,fig.width=15, fig.height=5}
+# Plot for linear_data_revenue 
+plot_3 <- ggplot(linear_data_revenue, aes(x = MARKETINGCHANNEL, y = orders, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity") + # Create a bar plot with identity statistic
+   geom_text(aes(label = round(orders,0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) + # Add text labels on bars for order values
+  theme_minimal() + # Use minimal theme for clean look
+  labs(title = "Linear Data Revenue by Marketing Channel", x = "Marketing Channel", y = "Revenue") + # Set the title and axis labels
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) + # Format y-axis labels to avoid scientific notation
+  scale_fill_manual(values = colors) + # Apply custom color mapping
+  theme_classic() + # Use classic theme for traditional aesthetics
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) # Rotate x-axis labels for better readability
+
+plot_4<-ggplot(linear_data_revenue, aes(x = "", y = percentage, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) + # Create a pie chart by converting bar chart with coord_polar
+  coord_polar("y", start = 0) + # Use polar coordinates for pie chart
+  theme_void() + # Remove background and axes
+  scale_fill_manual(values=colors)+ # Apply custom color mapping
+  theme(legend.position = "right") + # Position legend on the right
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) + # Add percentage labels inside pie slices
+  labs(title = "Proportion of Clicks by Marketing Channel") # Set chart title
+
+# Arrange plots side by side
+grid.arrange(plot_3, plot_4, ncol = 2)
+
+```
+**Direct_NON-BRAND** (447,000): This channel contributes the highest revenue, indicating that a significant portion of revenue comes from customers who directly visit the website without prior brand-specific searches. It suggests strong brand recognition or effective direct response marketing strategies.
+
+**SEO_BRAND** (370,000): Revenue attributed to organic search results specifically related to branded terms shows the effectiveness of SEO efforts targeting branded keywords. This indicates customers actively searching for the brand before making a purchase.
+
+**Referral** (184,000): Referral traffic contributes a substantial amount of revenue, indicating successful partnerships, word-of-mouth marketing, or referral programs driving traffic to the website.
+
+**SEO_NON-BRAND** (136,000): Revenue attributed to organic search results without specific brand-related keywords suggests the effectiveness of SEO efforts targeting generic or non-branded search terms. This channel helps attract new customers to the website.
+
+**Referral_NON-BRAND** (1,000): While relatively low compared to other channels, this indicates revenue attributed to referral sources without brand-specific context. Further analysis may be needed to understand the nature of these referrals.
+
+```{r echo=FALSE,fig.width=15, fig.height=5}
+# Define a set of custom colors for different marketing channels
+colors <- c("Direct_NON-BRAND" = "#1f77b4", "SEO_BRAND" = "#ff7f0e", "Referral" = "#2ca02c", "SEO_NON-BRAND" = "#d62728", "Adwords/" = "#9467bd", "Social Media organic_NON-BRAND" = "#8c564b", "Referral_NON-BRAND" = "red")
+
+### Create the first plot: Bar plot for Conversions by marketing channel
+plot_1 <- ggplot(linear_data, aes(x = MARKETINGCHANNEL, y = orders, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity") + # Use geom_bar to create a bar plot
+  geom_text(aes(label = round(orders,0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) + # Add order counts as text on the bars
+  theme_minimal() + # Use a minimal theme for a clean look
+  labs(title = "Linear Data Conversion by Marketing Channel", x = "Marketing Channel", y = "Orders") + # Add labels and title
+  theme_classic() + # Use classic theme for a traditional look
+  scale_fill_manual(values = colors) + # Apply custom colors to the bars
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) # Rotate x-axis text for readability
+
+### Create the second plot: Pie chart for the proportion of clicks by marketing channel
+plot_2 <- ggplot(linear_data, aes(x = "", y = percentage, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) + # Use geom_bar to create a pie chart (by using coord_polar)
+  coord_polar("y", start = 0) + # Convert bar chart to pie chart
+  theme_void() + # Use void theme to remove background and axes
+  scale_fill_manual(values=colors) + # Apply custom colors to the slices
+  theme(legend.position = "right") + # Position the legend to the right
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) + # Add percentage labels inside the pie slices
+  labs(title = "Proportion of Clicks by Marketing Channel") # Add title
+
+### Arrange both plots side by side
+grid.arrange(plot_1, plot_2, ncol = 2)
+
+
+
+```
+
+
+**Direct_NON-BRAND** (418): This channel indicates a significant number, suggesting that a considerable portion of customers directly visit the website without prior brand-specific searches.
+
+**SEO_BRAND** (357): Attributed to organic search results specifically related to branded terms signify the effectiveness of SEO efforts targeting branded keywords. This indicates active engagement from customers searching for the brand.
+
+**Referral** (176): Referral traffic contributes a notable number, indicating successful partnerships, word-of-mouth marketing, or referral programs driving traffic to the website.
+
+**SEO_NON-BRAND** (130): Attributed to organic search results without specific brand-related keywords suggest effective SEO efforts targeting generic or non-branded search terms. This channel helps attract new customers to the website.
+
+
+## U Shaped Attribution Model
+
+In the **U-shaped attribution model**, also known as the position-based model, the first and last touchpoints each receive 40% of the credit for a conversion, while the remaining 20% is distributed among all the middle touchpoints.  
+
+
+```{r , echo=FALSE}
+
+# Filter out customers with NA revenue and select only customer IDs
+df_customers <- df %>% filter(!is.na(REVENUE)) %>% select(CUSTOMERID)
+
+# Summarize total revenue per customer
+df_sum <- df %>% filter(CUSTOMERID %in% c(df_customers$CUSTOMERID)) %>% group_by(CUSTOMERID) %>%
+  summarise(total = sum(REVENUE, na.rm = TRUE))
+
+# Count total revenue-generating clicks per customer
+df_count <- df %>% filter(CUSTOMERID %in% c(df_customers$CUSTOMERID)) %>% mutate(classification = if_else(REVENUE > 0, 1, 0)) %>%
+  group_by(CUSTOMERID) %>%
+  summarise(total = sum(classification, na.rm = TRUE))
+
+# Calculate U-shaped revenue attribution per marketing channel
+df_1 <- df %>% filter(CUSTOMERID %in% c(df_customers$CUSTOMERID)) %>% group_by(CUSTOMERID) %>%
+    left_join(df_sum, by = "CUSTOMERID") %>% ungroup() %>% group_by(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>%
+    arrange(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>% ungroup() %>%
+  group_by(CUSTOMERID) %>% mutate(
+    RANK = row_number(),
+    proportion = case_when(
+      max(RANK) == 1 ~ 1,
+      max(RANK) == 2 ~ 0.5,
+      max(RANK) == RANK | min(RANK) == RANK ~ 0.4,
+      TRUE ~ 0.2 / n()
+    )
+  ) %>% mutate(total_revenue = proportion * total) %>%
+  group_by(MARKETINGCHANNEL) %>%
+  summarise(total_revenue_marketing = sum(total_revenue, na.rm = TRUE)) %>%
+  mutate(percentage = total_revenue_marketing / sum(total_revenue_marketing))%>%ungroup()%>%filter(total_revenue_marketing>1000)
+
+
+# Calculate U-shaped clicks revenue attribution per marketing channel
+df_2 <- df %>% filter(CUSTOMERID %in% c(df_customers$CUSTOMERID)) %>% group_by(CUSTOMERID) %>%
+    left_join(df_count, by = "CUSTOMERID") %>% ungroup() %>% group_by(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>%
+    arrange(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>% ungroup() %>% group_by(CUSTOMERID) %>% mutate(
+      RANK = row_number(),
+      proportion = case_when(
+        max(RANK) == 1 ~ 1,
+        max(RANK) == 2 ~ 0.5,
+        max(RANK) == RANK | min(RANK) == RANK ~ 0.4,
+        TRUE ~ 0.2 / n()
+      )
+    ) %>% ungroup() %>% mutate(total_clicks_revenue = proportion * total) %>%
+    group_by(MARKETINGCHANNEL) %>%
+    summarise(total_clicks_revenue_marketing = sum(total_clicks_revenue, na.rm = TRUE)) %>%
+    mutate(percentage = total_clicks_revenue_marketing / sum(total_clicks_revenue_marketing))%>%filter(total_clicks_revenue_marketing>2)%>%ungroup()
+
+
+# Plot 1: U-shaped Data Revenue - Order Participation by Marketing Channel
+plot_1 <- ggplot(df_1, aes(x = MARKETINGCHANNEL, y = total_revenue_marketing, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(total_revenue_marketing, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  theme_minimal() +
+  labs(title = "U-shaped Data Revenue by Marketing Channe;", x = "Marketing Channel", y = "Revenue") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = colors) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Plot 2: Proportion of Revenue by Marketing Channel (Pie Chart)
+plot_2 <- ggplot(df_1, aes(x = "", y = percentage, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Proportion of Revenue by Marketing Channel")
+
+# Plot 3: U-shaped Data Revenue - Click Participation by Marketing Channel
+plot_3 <- ggplot(df_2, aes(x = MARKETINGCHANNEL, y = total_clicks_revenue_marketing, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(total_clicks_revenue_marketing, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  theme_minimal() +
+  labs(title = "U-shaped Attribution Clicks by Marketing Channel", x = "Marketing Channel", y = "Revenue") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = colors) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Plot 4: Proportion of Clicks Revenue by Marketing Channel (Pie Chart)
+plot_4 <- ggplot(df_2, aes(x = "", y = percentage, fill = MARKETINGCHANNEL)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Proportion of Clicks  by Marketing Channel")
+
+
+
+
+```
+
+```{r , echo=FALSE,message=FALSE,fig.width=15, fig.height=5}
+grid.arrange(plot_1,plot_2,ncol=2)
+```
+**Direct_NON-BRAND **(434,685): This channel accounts for approximately 38.73% of the total revenue. It suggests that a significant portion of revenue comes from customers who directly visit the website without prior brand-specific searches.
+
+**SEO_BRAND **(364,957): Revenue from organic search results specifically related to branded terms constitutes about 32.52% of the total revenue. This indicates the effectiveness of SEO efforts targeting branded keywords and active customer engagement with the brand.
+
+**Referra**l (185,181): Referral traffic contributes roughly 16.50% of the total revenue. This suggests successful partnerships, word-of-mouth marketing, or referral programs driving traffic and revenue to the website.
+
+**SEO_NON-BRAND** (134,489): Revenue attributed to organic search results without specific brand-related keywords comprises approximately 11.98% of the total revenue. This channel indicates effective SEO efforts targeting generic or non-branded search terms, attracting new customers to the website.
+
+```{r , echo=FALSE,message=FALSE,fig.width=15, fig.height=5}
+grid.arrange(plot_3,plot_4,ncol=2)
+```
+
+**Direct_NON-BRAND** (435): Total clicks revenue for this channel constitutes about 39% of the total revenue.
+
+**SEO_BRAND** (365): Total clicks revenue for this channel represents around 33% of the total revenue.
+
+**Referral** (185): Total clicks revenue for this channel makes up roughly 17% of the total revenue.
+
+**SEO_NON-BRAND** (134): Total clicks revenue for this channel comprises about 12% of the total revenue.
+
+## Markov Chain Attribution Model
+
+This model employs Markov chains—a concept from the realm of probability theory and stochastic processes—to analyze the customer journey as a series of transitions between states (i.e., touchpoints or marketing channels).
+
+Key Features of the Markov Chain Attribution Model
+
+**Probability-Based Transitions**: It considers the likelihood of moving from one touchpoint to another, ultimately leading to a conversion. Each transition has a probability that reflects the effectiveness of moving from one marketing channel to the next in the path to conversion.
+
+**Removal Effect**: A unique aspect of the Markov model is its ability to calculate the "removal effect," which measures the impact of removing a particular channel from the marketing mix. This helps in understanding the contribution of each channel more dynamically, beyond just the direct path to conversion.
+
+**Customer Journey Insights**: By analyzing all possible conversion paths, the model provides deeper insights into how different channels influence the customer journey and interact with each other.
+
+
+
+```{r , echo=FALSE,message=FALSE,warning=FALSE,results='hide'}
+# Load the required package and suppress startup messages
+suppressPackageStartupMessages(library(ChannelAttribution))
+
+# Replace NA values in 'REVENUE' column with 0
+df$REVENUE[is.na(df$REVENUE)] <- 0
+
+# Arrange the dataframe by 'CUSTOMERID' and 'TIMESTAMP_TOUCHPOINT', then group by 'CUSTOMERID' and aggregate touchpoints
+data_aggregated <- df %>%
+  arrange(CUSTOMERID, TIMESTAMP_TOUCHPOINT) %>%
+  group_by(CUSTOMERID) %>%
+  summarise(
+    Path = paste(MARKETINGCHANNEL, collapse = " > "),  # Concatenate marketing channels into a single path
+    Conversion = max(Conversion),  # Find maximum conversion value
+    Revenue = sum(REVENUE)  # Sum of revenue if considering conversion value
+  ) %>%
+  ungroup()
+
+# Prepare the final dataset for the Markov Model with only 'Path' and 'Conversion' columns
+final_data <- select(data_aggregated, Path, Conversion)
+
+# Generate Markov model results for click-based analysis
+markov_results_clicks <- markov_model(
+  Data = data_aggregated,
+  var_path = "Path",
+  var_conv = "Conversion",
+  order = 3,  # Specifies the order of the Markov chain
+  out_more = TRUE  # Requests detailed output
+)
+
+# Prepare final dataset for the Markov Model with only 'Path' and 'Revenue' columns
+final_data <- select(data_aggregated, Path, Revenue)
+
+# Generate Markov model results for revenue-based analysis
+markov_results_revenue <- markov_model(
+  Data = data_aggregated,
+  var_path = "Path",
+  var_conv = "Revenue",
+  order = 3,  # Specifies the order of the Markov chain
+  out_more = TRUE  # Requests detailed output
+)
+
+# Extract Markov model results for clicks into a dataframe and calculate percentage of total conversions
+markov_results_clicks_df <- markov_results_clicks$result %>%
+  mutate(percentage = total_conversions / sum(total_conversions))
+
+# Extract Markov model removal effects for clicks into a dataframe
+markov_results_clicks_removal_effect_df <- markov_results_clicks$removal_effects
+
+# Extract Markov model results for revenue into a dataframe
+markov_results_revenue_df <- markov_results_revenue$result
+
+# Extract Markov model removal effects for revenue into a dataframe
+markov_results_removal_effect_df <- markov_results_revenue$removal_effects
+```
+
+```{r , echo=FALSE,message=FALSE}
+# Join Markov model results dataframe with removal effects dataframe based on 'channel_name'
+plot_df <- markov_results_revenue_df %>% 
+  left_join(markov_results_removal_effect_df, by = "channel_name")
+
+# Calculate percentage of total conversions for each channel
+plot_df <- plot_df %>% 
+  mutate(percentage = total_conversions / sum(total_conversions))
+
+
+
+# Pie chart for removal effects on revenue
+plot_1 <- ggplot(plot_df[plot_df$removal_effects > 0.1, ], aes(x = "", y = removal_effects, fill = channel_name)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "right") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(round(removal_effects * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Removal Effects of Channels on Revenue")
+
+# Pie chart for removal effects on clicks
+plot_2 <- ggplot(markov_results_clicks_removal_effect_df[markov_results_clicks_removal_effect_df$removal_effects > 0.1, ], aes(x = "", y = removal_effects, fill = channel_name)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(removal_effects * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Removal Effects of Channels on Clicks")
+
+# Arrange plots in a grid
+grid.arrange(plot_1, plot_2, ncol = 2)
+
+
+
+```
+**Overview of Removal Effects**
+
+**Removal Effect**: This metric represents the impact on conversion rates if a specific channel were removed from the marketing mix. It quantifies the decrease in conversions attributed to the absence of that channel, highlighting its importance in the customer journey.
+
+**Key Insights from the Data**
+
+**Direct_NON-BRAND**: With a removal effect of 0.4494 and accounting for 38.04% of the conversions, this channel is evidently crucial. Its high removal effect suggests that removing Direct_NON-BRAND interactions would significantly impact overall conversion rates, indicating its central role in driving conversions.
+
+**Referral**: Shows a removal effect of 0.2026, translating to 17.15% of conversions. Although less impactful than Direct_NON-BRAND, Referral is still a significant driver of conversions, indicating that referral traffic plays a vital role in the conversion process.
+
+**SEO_BRAND**: With a removal effect of 0.3764 and making up 31.86% of conversions, SEO_BRAND is another key channel. Its high contribution underscores the importance of brand-related search engine optimization efforts in attracting converting traffic.
+
+**SEO_NON-BRAND**: This channel's removal effect is 0.1468, accounting for 12.43% of conversions. While less influential than branded SEO, non-brand SEO still plays a meaningful role in the marketing mix, attracting a noteworthy portion of conversions.
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+
+# Plot 1: Bar chart showing total revenue by marketing channel (ordered by total revenue)
+plot_1 <- ggplot(plot_df, aes(x = reorder(channel_name, -total_conversions), y = total_conversions, fill = channel_name)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(total_conversions, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  theme_classic() + # Changed to theme_classic to match the second plot
+  labs(title = "Revenue by Marketing Channel Markov Chain",
+       x = "Marketing Channel",
+       y = "Revenue") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = colors) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+        legend.position = "none") + # Remove legend
+  coord_flip()
+
+# Plot 2: Pie chart showing proportion of clicks by marketing channel
+plot_2 <- ggplot(plot_df, aes(x = "", y = percentage, fill = channel_name)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Proportion of Clicks by Marketing Channel")
+
+# Plot 3: Bar chart showing total revenue by marketing channel (ordered by total revenue)
+plot_3 <- ggplot(markov_results_clicks_df, aes(x = reorder(channel_name, -total_conversions), y = total_conversions, fill = channel_name)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(total_conversions, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  theme_classic() + # Changed to theme_classic to match the second plot
+  labs(title = "Clicks by Marketing Channel Markov Chain",
+       x = "Marketing Channel",
+       y = "Revenue") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = colors) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), # Rotate x-axis labels
+        legend.position = "none") + # Remove legend
+  coord_flip()
+
+# Plot 4: Pie chart showing proportion of clicks by marketing channel
+plot_4 <- ggplot(markov_results_clicks_df, aes(x = "", y = percentage, fill = channel_name)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  theme(legend.position = "right") +
+  geom_text(aes(label = paste0(round(percentage * 100, 2), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Proportion of Clicks by Marketing Channel")
+
+
+
+```
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+grid.arrange(plot_1,plot_2,ncol=2)
+```
+**Direct_NON-BRAND**: This channel has a total of approximately 434,412 conversions, constituting about 38.04% of the total conversions.
+
+**Referral**: This channel has a total of approximately 195,843 conversions, making up roughly 17.15% of the total conversions.
+
+**SEO_BRAND**: This channel has a total of approximately 363,847 conversions, representing around 31.86% of the total conversions.
+
+**SEO_NON-BRAND**: This channel has a total of approximately 141,904 conversions, comprising about 12.43% of the total conversions
+
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+
+grid.arrange(plot_3,plot_4,ncol=2)
+
+```
+
+**Direct_NON-BRAND**: This channel has a total of approximately 258.48 conversions, constituting about 35.21% of the total conversions.
+
+**Referral**: This channel has a total of approximately 129.71 conversions, making up roughly 17.67% of the total conversions.
+
+**SEO_BRAND**: This channel has a total of approximately 251.29 conversions, representing around 34.24% of the total conversions.
+
+**SEO_NON-BRAND**: This channel has a total of approximately 93.71 conversions, comprising about 12.77% of the total conversions.
+
+
+## Comparison Of Models
+
+
+### Revenue attribution by models 
+
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+# Combine different dataframes and rename columns
+df_total <- df_first_channel_revenue %>%
+  rename(total_first_touchpoint = total) %>%
+  left_join(df_last_channel_revenue %>% rename(total_last_touchpoint = total), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL_LAST")) %>%
+  left_join(df_1 %>% rename(total_u_shaped_revenue = total_revenue_marketing), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL")) %>%
+  left_join(linear_data_revenue %>% rename(total_revenue_linear_data = orders), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL")) %>%
+  left_join(markov_results_revenue_df %>% rename(total_revenue_markov_chain = total_conversions), by = c("MARKETINGCHANNEL_FIRST" = "channel_name")) %>%
+  select(MARKETINGCHANNEL_FIRST, total_first_touchpoint, total_last_touchpoint, total_revenue_linear_data, total_u_shaped_revenue, total_revenue_markov_chain)
+
+df_total <- df_total %>%
+  mutate(across(-MARKETINGCHANNEL_FIRST, round))
+
+# Print the dataframe as a table using kable
+kable(df_total)
+
+# Transform data to long format
+df_long <- df_total %>%
+  pivot_longer(cols = -MARKETINGCHANNEL_FIRST, names_to = "Metric", values_to = "Value")
+
+# Create the bar plot
+ggplot(df_long, aes(x = MARKETINGCHANNEL_FIRST, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(Value, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Marketing Channel", y = "Value", fill = "Metric")
+
+
+
+df_clicks_total<-df_first_channel_clicks%>%filter(total>1) %>%
+  rename(total_first_touchpoint_clicks = total) %>%
+  left_join(df_last_channel_clicks %>% rename(total_last_touchpoint_clicks = total), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL_LAST"))%>%left_join(linear_data %>% rename(total_linar_attribution_clicks = orders), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL"))%>%left_join(df_2 %>% rename(total_u_shaped_attribution_clicks = total_clicks_revenue_marketing), by = c("MARKETINGCHANNEL_FIRST" = "MARKETINGCHANNEL"))%>%
+left_join(markov_results_clicks_df %>% rename(total_markv_chain_attribution_clicks = total_conversions), by = c("MARKETINGCHANNEL_FIRST" = "channel_name"))%>%select(MARKETINGCHANNEL_FIRST,total_first_touchpoint_clicks,total_last_touchpoint_clicks,total_linar_attribution_clicks,total_u_shaped_attribution_clicks,total_markv_chain_attribution_clicks)
+
+
+```
+
+ **Direct_NON-BRAND**<br>
+*First Touchpoint*: 434,000<br>
+*Last Touchpoint*: 454,000<br>
+*Linear Data*: 446,954<br>
+*U-Shaped Revenue*: 434,684<br>
+*Markov Chain*: 434,412<br>
+*Comments*: 
+Direct_NON-BRAND traffic has a strong presence as both a first and last touchpoint, indicating it is important for both attracting new visitors and closing sales. The Markov Chain model, which considers the entire conversion path, offers a slightly lower revenue attribution than the linear model, suggesting that this channel might not always play the pivotal role in the conversion process.
+
+**SEO_BRAND**<br>
+*First Touchpoint*: 385,000<br>
+*Last Touchpoint*: 357,000<br>
+*Linear Data*: 370,031<br>
+*U-Shaped Revenue*: 364,956<br>
+*Markov Chain*: 363,847<br>
+*Comments*: 
+SEO_BRAND shows more effectiveness in attracting visitors initially than in closing sales. The consistency across the models, with a slight decrease in the Markov Chain model, suggests it's a strong channel for awareness but might require support from other channels to convert.
+
+**Referral**<br>
+
+*First Touchpoint*: 188,000<br>
+*Last Touchpoint*: 187,000<br>
+*Linear Data*: 184,488<br>
+*U-Shaped Revenue*: 185,180<br>
+*Markov Chain*: 195,843<br>
+*Comments*: 
+Referral traffic is relatively balanced as both a first and last touchpoint. Interestingly, the Markov Chain model attributes the highest revenue to this channel, indicating that referrals might play a critical role at various points in the customer journey, influencing decisions more than initially apparent.
+
+**SEO_NON-BRAND**<br>
+*First Touchpoint*: 134,000<br>
+*Last Touchpoint*: 139,000<br>
+*Linear Data*: 136,418<br>
+*U-Shaped Revenue*: 134,489<br>
+*Markov Chain*: 141,904<br>
+
+**Comments**:
+SEO_NON-BRAND traffic is more effective as a last touchpoint, suggesting it's more important in closing sales than initiating interest. The Markov Chain model again provides a higher revenue attribution than the linear model, suggesting its role in the conversion path is significant and possibly undervalued by simpler models.
+
+**Overall Insights**:
+Direct_NON-BRAND and SEO_BRAND are critical for initiating contact and closing sales, respectively, with Direct_NON-BRAND showing a strong capability to finalize conversions.
+Referral traffic is a dark horse, with its value in the conversion process being particularly highlighted by the Markov Chain model, suggesting its influence is spread throughout the customer journey rather than at specific touchpoints.
+SEO_NON-BRAND appears to be a strong closer, with its value in finalizing sales being recognized across models, particularly in the Markov Chain analysis.
+
+
+
+### Cliks  attribution by models 
+```{r , echo=FALSE,fig.width=15, fig.height=5}
+# Using mutate across all columns except the first (non-numeric) one, rounding to the nearest whole number
+df_clicks_total <- df_clicks_total %>%
+  mutate(across(-MARKETINGCHANNEL_FIRST, round))
+
+kable(df_clicks_total)
+
+df_long <- df_clicks_total %>%
+  pivot_longer(cols = -MARKETINGCHANNEL_FIRST, names_to = "Metric", values_to = "Value")
+
+# Create the bar plot
+ggplot(df_long, aes(x = MARKETINGCHANNEL_FIRST, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(Value, 0)), vjust = 1, position = position_dodge(width = 0.9), size = 3) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Marketing Channel", y = "Value", fill = "Metric")
+
+```
+
+**Direct_NON-BRAND**<br>
+*First Touchpoint Clicks*: 434<br>
+*Last Touchpoint Clicks*: 454<br>
+*Linear Attribution Clicks*: 418<br>
+*U-Shaped Attribution Clicks*: 434<br>
+*Markov Chain Attribution Clicks*: 258<br>
+*Comments*: *Direct_NON-BRAND shows strong performance both at initiating interest (first touchpoint) and closing engagement (last touchpoint), suggesting its effectiveness across the customer journey. However, the Markov Chain model attributes significantly fewer clicks to this channel, suggesting that while it may initiate and close many engagements, its role in the middle of the journey or in less direct conversions is less dominant.*<br>
+
+**SEO_BRAND**<br>
+*First Touchpoint Clicks*: 385<br>
+*Last Touchpoint Clicks*: 357<br>
+*Linear Attribution Clicks*: 356<br>
+*U-Shaped Attribution Clicks*: 364<br>
+*Markov Chain Attribution Clicks*: 251<br>
+*Comments*: *SEO_BRAND performs well in attracting initial clicks and also plays a notable role in concluding engagements. The consistency between linear and U-Shaped attributions suggests a balanced contribution throughout the customer journey. The Markov Chain model gives it fewer clicks, indicating its indirect influence might be less than direct engagements suggest.*<br>
+
+**Referral**<br>
+*First Touchpoint Clicks*: 188<br>
+*Last Touchpoint Clicks*: 187<br>
+*Linear Attribution Clicks*: 176<br>
+*U-Shaped Attribution Clicks*: 185<br>
+*Markov Chain Attribution Clicks*: 129<br>
+*Comments*: *Referral traffic is almost equally effective at beginning and ending customer engagements. The U-Shaped model, which gives more credit to the first and last interactions, rates it slightly higher than the linear model, indicating its strength in initiating and concluding the customer journey. The Markov Chain model's lower attribution suggests referrals might not be as influential throughout the entire conversion path.*<br>
+
+**SEO_NON-BRAND**<br>
+*First Touchpoint Clicks*: 134<br>
+*Last Touchpoint Clicks*: 139<br>
+*Linear Attribution Clicks*: 129<br>
+*U-Shaped Attribution Clicks*: 134<br>
+*Markov Chain Attribution Clicks*: 93<br>
+*Comments*: *SEO_NON-BRAND is effective in both attracting new engagements and closing them, with a slight preference for the latter. Its performance in the U-Shaped model suggests a solid contribution at both ends of the customer journey. The Markov Chain's lower attribution again indicates that its role may be less significant in the middle stages of the customer journey or in indirect paths to conversion.*<br>
+
+
+
+
+## Conclusion
+
+**Commentary on the Results**
+
+
+**Direct_NON-BRAND** has shown a consistent performance across all models, both in terms of revenue and clicks, indicating its strong role in initiating and closing sales. However, its highest effectiveness is seen in first and last touchpoints, with a slight dip in Markov Chain attribution for clicks, suggesting it might not always be the strongest influencer in the conversion path.
+
+**SEO_BRAND** is effective in maintaining brand loyalty and conversion, as indicated by its steady revenue across models. It slightly underperforms in the Markov Chain model for revenue and clicks, hinting that while brand-related searches are crucial, they may not always be the most influential touchpoint in the customer's decision-making process.
+
+**Referral** traffic shows a significant increase in revenue in the Markov Chain model, suggesting that referrals are a strong influential factor throughout the customer journey, possibly due to the trust factor associated with personal recommendations or trusted third-party platforms.
+
+**SEO_NON-BRAND** has shown an increase in both revenue and clicks in the Markov Chain model, indicating its importance in the discovery phase and as a consistent touchpoint throughout the customer journey.
+
+**The Removal Effects** data underscores the importance of Direct_NON-BRAND, SEO_BRAND, and Referral channels in influencing customer decisions, with their removal having the most significant negative impact on conversions. This highlights their strategic importance in the marketing mix.
