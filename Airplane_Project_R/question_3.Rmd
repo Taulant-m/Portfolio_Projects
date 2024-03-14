@@ -1,0 +1,131 @@
+---
+title: "question_4.rmd"
+output: word_document
+date: "2023-03-25"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message=FALSE)
+
+
+library(datasets)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(plyr)
+library(ggplot2)
+library(purrr)
+library(treemapify)
+library(DBI)
+library(RSQLite)
+```
+
+## Question 3:How does the number of people flying between different locations change over time?
+
+
+
+```{r }
+
+
+plane_data<-read.csv("D:/R files/plane-data.csv")
+airports<-read.csv("D:/R files/airports.csv")
+
+conn <- dbConnect(RSQLite::SQLite(), "Coursework_1234.db")
+# read the data from the 'my_table' table into a data.frame
+
+
+# Drop table if it exists
+dbExecute(conn, "DROP TABLE IF EXISTS d40")
+
+
+# read d1 CSV file into d38 table
+d1 <- read.csv("D:/R files/2004.csv")
+dbWriteTable(conn, 'd39', d1, append=FALSE)
+
+# read d2 CSV file into d38 table
+d2 <- read.csv("D:/R files/2005.csv")
+dbWriteTable(conn, 'd39', d2, append=TRUE)
+
+# read d3 CSV file into d38 table
+d3 <- read.csv("D:/R files/2006.csv")
+dbWriteTable(conn, 'd39', d3, append=TRUE)
+
+# remove d1, d2, d3 from memory
+rm(d1, d2, d3)
+
+ 
+df<- dbGetQuery(conn, "
+Select * from d39 where Diverted==0 and Cancelled==0
+")
+
+dbDisconnect(conn)
+
+
+```
+
+
+```{r }
+
+
+top<-df%>%dplyr::filter(Diverted==0&Cancelled==0)%>%dplyr::group_by(Origin)%>%dplyr::summarize(Count=n())%>%top_n(n=10)
+
+top
+```
+
+
+```{r  echo=FALSE,message=FALSE}
+
+
+
+
+plot_flights<- df %>%
+  dplyr::filter(Diverted == 0 & Cancelled == 0 & Dest %in% c(top$Origin) &
+           !is.na(Year) & is.finite(Year) &
+           !is.na(Month) & is.finite(Month)) %>%
+  dplyr::group_by(Month, Year, Dest) %>%
+  dplyr::summarise(Total_Flights = n())%>%mutate(Date = as.Date(paste0(Year, "-", Month, "-01")))
+
+ggplot(plot_flights, aes(x = Date, y = Total_Flights, group = Dest, color = Dest)) +
+  geom_line(size = 1) +
+ scale_x_date(date_breaks = "6 months", date_labels = "%b-%Y",
+               limits = c(as.Date("2004-01-01"), as.Date("2006-12-31")),
+               expand = c(0, 0)) +
+  labs(x = "Month-Year", y = "Total Flights", color = "Destination Airport") +
+  theme_bw()
+
+
+
+ggplot(plot_flights, aes(x = Year, y = Total_Flights, fill = Dest)) +
+  facet_wrap(~ Dest) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_x_continuous(breaks = c(2004, 2005,2006)) + #To order the x axis year in order
+  labs(x = "Year", y = "Total Flights") +
+  theme_bw()+
+  theme(strip.text = element_text(size = 12, face = "bold"))+ggtitle("Total flights by Destination  (2004-2006)")
+
+plot_flights<- df %>%
+  dplyr::filter(Diverted == 0 & Cancelled == 0 & Origin %in% c(top$Origin) &
+           !is.na(Year) & is.finite(Year) &
+           !is.na(Month) & is.finite(Month)) %>%
+  dplyr::group_by(Month, Year, Origin) %>%
+  dplyr::summarise(Total_Flights = n())%>%mutate(Date = as.Date(paste0(Year, "-", Month, "-01")))
+
+ggplot(plot_flights, aes(x = Date, y = Total_Flights, group = Origin, color = Origin)) +
+  geom_line(size = 1) +
+ scale_x_date(date_breaks = "6 months", date_labels = "%b-%Y",
+               limits = c(as.Date("2004-01-01"), as.Date("2006-12-31")),
+               expand = c(0, 0)) +
+  labs(x = "Month-Year", y = "Total Flights", color = "Origin Airport") +
+  theme_bw()
+
+
+ggplot(plot_flights, aes(x = Year, y = Total_Flights, fill = Origin)) +
+  facet_wrap(~ Origin) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_x_continuous(breaks = c(2004, 2005,2006)) + #To order the x axis year in order
+  labs(x = "Year", y = "Total Flights") +
+  theme_bw()+
+  theme(strip.text = element_text(size = 12, face = "bold"))+ggtitle("Total flights by Destination  (2004-2006)")
+
+```

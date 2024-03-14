@@ -1,0 +1,226 @@
+---
+title: "question_3.Rmd"
+output: word_document
+date: "2023-03-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE)
+
+# Load necessary libraries
+
+
+library(datasets)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(plyr)
+library(ggplot2)
+library(purrr)
+library(treemapify)
+library(DBI)
+library(RSQLite)
+library(tidyverse)
+library(igraph)
+
+library(ggraph)
+library(tidyr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(zoo)
+library(pROC)
+```
+
+## Question 4 : Can you detect cascading failures as delays in one airport create delays in others?
+
+
+```{r }
+
+plane_data<-read.csv("D:/R files/plane-data.csv")
+
+
+`%!in%` <- Negate(`%in%`)
+
+
+conn <- dbConnect(RSQLite::SQLite(), "Coursework_1234.db")
+# read the data from the 'my_table' table into a data.frame
+
+# Drop table if it exists
+dbExecute(conn, "DROP TABLE IF EXISTS d40")
+
+# read d1 CSV file into d38 table
+d1 <- read.csv("D:/R files/2004.csv")
+dbWriteTable(conn, 'd40', d1, append=FALSE)
+
+# read d2 CSV file into d38 table
+d2 <- read.csv("D:/R files/2005.csv")
+dbWriteTable(conn, 'd40', d2, append=TRUE)
+
+# read d3 CSV file into d38 table
+d3 <- read.csv("D:/R files/2006.csv")
+dbWriteTable(conn, 'd40', d3, append=TRUE)
+
+# remove d1, d2, d3 from memory
+rm(d1, d2, d3)
+
+ 
+df<- dbGetQuery(conn, "
+Select * from d40 where diverted==0 and Cancelled == 0
+")
+
+dbDisconnect(conn)
+
+
+```
+
+```{r }
+
+# create a new column 'Date'
+df$date <- ymd(paste(df$Year, df$Month, df$DayofMonth, sep = "-"))
+
+df
+```
+
+```{r }
+# Load flight data
+# Keep only the relevant columns
+flights <- df%>% select(Year, Month, DayOfWeek, DepTime, ArrTime, UniqueCarrier, FlightNum, Origin, Dest,DepDelay,ArrDelay, Cancelled)
+
+
+`%!in%` <- Negate(`%in%`)
+# Create a network of airports
+airports <- unique(c(flights$Origin, flights$Dest))
+edges <- flights %>% select(Origin, Dest) %>% distinct()
+g <- graph_from_data_frame(edges, directed = TRUE, vertices = airports)
+
+# Analyze the network structure
+betweenness <- betweenness(g)
+centrality <- data.frame(name = airports, betweenness = betweenness)
+top_airports <- centrality %>% top_n(10, betweenness)
+
+
+# Collect data on flight delays and cancellations
+airport_data <- flights %>% dplyr::group_by(Origin) %>%dplyr::summarize(
+  num_flights = n(),
+  avg_delay = mean(ArrDelay, na.rm = TRUE),
+  num_delays = sum(ArrDelay > 0, na.rm = TRUE)
+)
+
+# Add airport data as vertex attributes
+V(g)$num_flights <- airport_data$num_flights[match(V(g)$name, airport_data$Origin)]
+V(g)$avg_delay <- airport_data$avg_delay[match(V(g)$name, airport_data$Origin)]
+V(g)$num_delays <- airport_data$num_delays[match(V(g)$name, airport_data$Origin)]
+
+
+# Plot the network
+plot(g, vertex.size = 2, vertex.label = NA, edge.arrow.size = 0.2)
+```
+
+```{r }
+## TOp 10 airport betweenness
+top_airports
+
+```
+
+```{r }
+
+# Remove top airports one by one and observe the impact on the rest of the network
+for (airport in top_airports$name) {
+  g_copy <- delete_vertices(g, airport)
+  print(paste0("Removed ", airport, ", number of connected components: ", clusters(g_copy)$no))
+}
+
+```
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r  echo=FALSE}
+# Get unique names in the "Origin" column
+names <- unique(top_airports$name)
+
+
+
+# Loop through each name and create a dataframe
+for (name in names) {
+  # Filter the data by the current name
+  df_filtered <- df %>% 
+    dplyr::filter(Origin == name) %>%
+    dplyr::group_by(date(date), Origin) %>%
+    dplyr::summarise(delay_ = mean(DepDelay,na.rm = TRUE))
+  
+  
+  po<-unique(df%>%dplyr::filter(df$Origin==name)%>%select(Dest))
+  
+  # Filter the data by the current name
+  df_filtered_<- df %>% 
+    dplyr::filter(Origin %in%  c(po$Dest)) %>%
+    dplyr::group_by(date(date), Origin) %>%
+    dplyr::summarise(delay = mean(DepDelay,na.rm = TRUE))
+  
+  colnames(df_filtered)[1]<-'data'
+  colnames(df_filtered_)[1]<-'data'
+  colnames(df_filtered)[2]<-paste0(name)
+  
+  df_filtered<-df_filtered[,c('data','delay_')]
+  new_data <- pivot_wider(df_filtered_, names_from = Origin, values_from = delay)
+
+  
+  df_filtered_1<-df_filtered%>%inner_join(new_data,by=c('data'))
+  
+  
+  assign(paste0("delay_", name), df_filtered_1)
+}
+
+top_airports
+
+
+# Create an empty list to store data frames
+dfs <- list()
+
+# Loop through each airport
+for (airport in c("ORD", "DEN","DFW", "IAH","ATL", "LAX","MSP", "SLC","ANC", "CVG")) {
+  
+  # Get the delay data for the current airport
+  delay_data <- get(paste0("delay_", airport))
+  
+  # Create an empty data frame to store results
+  results_df <- data.frame(Correlation = numeric(), Airport_to = character(), Airport_from = character(), stringsAsFactors = FALSE)
+  
+  # Loop through each city and calculate correlation
+  for (city in names(delay_data)[-1]) {
+    corr <- cor(delay_data$delay_, delay_data[[city]], use = "pairwise.complete.obs")
+    new_row <- data.frame(col1 = corr, col2 = city, col3 = airport, stringsAsFactors = FALSE)
+    results_df <- rbind(results_df, new_row)
+  }
+  
+  # Add results data frame to the list
+  dfs[[airport]] <- results_df
+}
+
+# Combine data frames using do.call
+final_df <- do.call(rbind, dfs)
+
+final_df<-final_df[final_df$col1>0.60&final_df$col1<1,]
+final_df
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+```{r }
+plot_final<-final_df %>%
+  group_by(col3) %>%
+  top_n(5, col1)
+
+## Plot Heatmap of top 5 correlation for top 10 airports 
+ggp <- ggplot(plot_final, aes(col3, col2)) +
+  geom_tile(aes(fill = col1)) + geom_text(aes(label = round(col1, 2)), color = "white") +
+  labs(x = "Airports", y = "Correlation", fill = "Correlation")
+
+ggp
+
+```

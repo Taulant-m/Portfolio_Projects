@@ -1,0 +1,240 @@
+---
+title: "2nd_question"
+output: word_document
+date: "2023-03-25"
+---
+
+## Question 2 : Do Older Planes suffer more delays ?
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message=FALSE)
+
+
+library(datasets)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(plyr)
+library(ggplot2)
+library(purrr)
+library(treemapify)
+library(DBI)
+library(RSQLite)
+```
+
+# Read the Data
+
+```{r }
+
+plane_data<-read.csv("D:/R files/plane-data.csv")
+
+
+`%!in%` <- Negate(`%in%`)
+
+
+conn <- dbConnect(RSQLite::SQLite(), "Coursework_1234.db")
+# read the data from the 'my_table' table into a data.frame
+
+
+# read d1 CSV file into d38 table
+d1 <- read.csv("D:/R files/2004.csv")
+dbWriteTable(conn, 'd40', d1, append=FALSE)
+
+# read d2 CSV file into d38 table
+d2 <- read.csv("D:/R files/2005.csv")
+dbWriteTable(conn, 'd40', d2, append=TRUE)
+
+# read d3 CSV file into d38 table
+d3 <- read.csv("D:/R files/2006.csv")
+dbWriteTable(conn, 'd40', d3, append=TRUE)
+
+# remove d1, d2, d3 from memory
+rm(d1, d2, d3)
+
+ 
+df<- dbGetQuery(conn, "
+Select * from d40 where diverted==0 and Cancelled == 0
+")
+
+dbDisconnect(conn)
+
+
+```
+
+##  Join dataframes
+
+
+
+```{r  echo=FALSE}
+
+# Join df with plane_data in order to get the age of the plane 
+df<-df%>%inner_join(plane_data,by=c('TailNum'='tailnum'))
+
+# convert to int Year and year
+df$Year<-as.integer(df$Year)
+df$year<-as.integer(df$year)
+# Calculate difference to get plane_age
+df<-df%>%mutate(Plane_life=Year-year)
+
+
+```
+
+
+```{r  echo=FALSE}
+#Filters out rows where the flight was not cancelled or diverted and the value in the Plane_life column is not missing.
+#Groups the resulting rows by the unique values in the Plane_life column.
+#Calculates several summary statistics for each group, including the average delay (arrival delay plus departure delay), average departure delay, average arrival delay, count of flights, and count of distinct airplane tail numbers (TailNum) for that group.
+#Stores the resulting summary data in a new data frame called plot_1.
+
+plot_1<-df%>%dplyr::filter(df$Cancelled==0 & df$Diverted==0& !is.na(df$Plane_life))%>%
+  dplyr::group_by(Plane_life)%>%dplyr:: summarize(
+    AVGDelay = mean(DepDelay + ArrDelay,na.rm = TRUE),
+    AVGDepDelay = mean(DepDelay),
+    AVGArrDelay = mean(ArrDelay),
+    Count = n(),
+    distinct_categories = n_distinct(TailNum)
+  )
+
+
+# create the plot
+
+#The ggplot function is called with the plot_1 dataframe as the first argument and aes function is used to specify the x and y #variables. The x variable is set to factor(Plane_life) to treat the Plane_life variable as a categorical variable. The y variable is #set to Count, which represents the number of flights for each category of plane life.
+
+#The geom_bar function is then used to create a bar plot with the stat argument set to "identity" to use the actual values in Count.
+
+#The labs function is used to specify the title and labels for the x and y axes.
+
+#Finally, scale_y_continuous is used to format the y-axis labels as thousands.
+ggplot(plot_1, aes(x = factor(Plane_life), y = Count)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Plane Life vs. Count", x = "Plane Life", y = "Count of Flights by Year of Plane")+
+  scale_y_continuous(labels = scales::number_format(scale = 1e-3))
+
+
+
+```
+
+
+
+```{r echo=FALSE}
+#plot_1 filters the dataframe to remove missing values in the Plane_life column and negative values in the ArrDelay column and filters ArrDelay that are >0. Then, it #groups the remaining data by Plane_life and calculates the mean of DepDelay + ArrDelay, DepDelay, ArrDelay, Count, and #distinct_categories columns.
+
+plot_1<-df%>%dplyr::filter( !is.na(df$Plane_life)&df$ArrDelay>0)%>%
+  dplyr::group_by(Plane_life)%>%dplyr:: summarize(
+    AVGDelay = mean(DepDelay + ArrDelay,na.rm = TRUE),
+    AVGDepDelay = mean(DepDelay),
+    AVGArrDelay = mean(ArrDelay),
+    Count = n(),
+    distinct_categories = n_distinct(TailNum)
+  )
+
+#plot_1 filters the dataframe to remove missing values in the Plane_life column and negative values in the ArrDelay column and filters DepDelay that are >0. Then, it #groups the remaining data by Plane_life and calculates the mean of DepDelay + ArrDelay, DepDelay, ArrDelay, Count, and #distinct_categories columns.
+
+plot_2<-df%>%dplyr::filter(Cancelled==0 & Diverted==0& !is.na(df$Plane_life)&DepDelay>0)%>%
+  dplyr::group_by(Plane_life)%>% dplyr::summarize(
+    AVGDelay = mean(DepDelay + ArrDelay,na.rm = TRUE),
+    AVGDepDelay = mean(DepDelay),
+    AVGArrDelay = mean(ArrDelay),
+    Count = n(),
+    distinct_categories = n_distinct(TailNum)
+  )
+
+
+
+# Filter only planes that their age is between 0 to 22
+plot_1<-plot_1[plot_1$Plane_life>0&plot_1$Plane_life<=22,]
+# Filter only planes that their age is between 0 to 22
+plot_2<-plot_2[plot_2$Plane_life>0&plot_2$Plane_life<=22,]
+
+#This code generates a scatter plot with a smoothed line using loess method for the AVGArrDelay variable against Plane_life variable #from the plot_1 dataframe. It also adds jittered points to show the distribution of data points.
+#The labs() function is used to add labels to the plot title, x-axis, and y-axis.
+#The theme() function is used to modify the appearance of the plot, such as the color and size of the axis text and title.
+#The theme_minimal() function sets the theme to a minimal style.
+#Overall, the plot shows the relationship between the average arrival delay and the age of the plane, with a smoothed line indicating #a general trend of increasing delay with increasing age. The jittered points show the distribution of data points at each age group.
+
+ggplot() + 
+  geom_smooth(data = plot_1, aes(x = Plane_life, y= AVGArrDelay), color = "black", size = 0.8, method = loess) +
+  geom_jitter(data = plot_1, aes(x = Plane_life, y= AVGArrDelay),color = "#FF6666", size = 3) + 
+  labs(title = 'Average Delay against Plane Age', x = 'Plane Age' , y = 'Average Delay') +
+  theme(axis.text = element_text( hjust = 1, vjust = 0.5)) +
+  theme(axis.text.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20)
+  )+theme_minimal()
+
+
+
+ggplot() + 
+  geom_smooth(data = plot_2, aes(x = Plane_life, y= AVGDepDelay), color = "black", size = 0.8, method = loess) +
+  geom_jitter(data = plot_2, aes(x = Plane_life, y= AVGDepDelay),color = "#FF6666", size = 3) + 
+  labs(title = 'Average Delay against Plane Age', x = 'Plane Age' , y = 'Average Delay') +
+  theme(axis.text = element_text( hjust = 1, vjust = 0.5)) +
+  theme(axis.text.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20)
+  )+theme_minimal()
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r  echo=FALSE}
+plot_1<-df%>%dplyr::filter(df$Cancelled==0 & df$Diverted==0& !is.na(df$Plane_life))%>%
+  dplyr::group_by(Plane_life)%>%dplyr:: summarize(
+    AVGDelay = mean(DepDelay + ArrDelay,na.rm = TRUE),
+    AVGDepDelay = mean(DepDelay),
+    AVGArrDelay = mean(ArrDelay),
+    Count = n(),
+    distinct_categories = n_distinct(TailNum)
+  )
+
+
+plot_2<-df%>%dplyr::filter(Cancelled==0 & Diverted==0& !is.na(df$Plane_life))%>%
+  dplyr::group_by(Plane_life)%>%dplyr:: summarize(
+    AVGDelay = mean(DepDelay + ArrDelay,na.rm = TRUE),
+    AVGDepDelay = mean(DepDelay),
+    AVGArrDelay = mean(ArrDelay),
+    Count = n(),
+    distinct_categories = n_distinct(TailNum)
+  )
+
+
+
+
+plot_1<-plot_1[plot_1$Plane_life>0&plot_1$Plane_life<=22,]
+
+plot_2<-plot_2[plot_2$Plane_life>0&plot_2$Plane_life<=22,]
+
+ggplot() + 
+  geom_smooth(data = plot_1, aes(x = Plane_life, y= AVGArrDelay), color = "black", size = 0.8, method = loess) +
+  geom_jitter(data = plot_1, aes(x = Plane_life, y= AVGArrDelay),color = "#FF6666", size = 3) + 
+  labs(title = 'Average Delay against Plane Age', x = 'Plane Age' , y = 'Average Delay') +
+  theme(axis.text = element_text( hjust = 1, vjust = 0.5)) +
+  theme(axis.text.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20)
+  )+theme_minimal()
+
+
+
+ggplot() + 
+  geom_smooth(data = plot_2, aes(x = Plane_life, y= AVGDepDelay), color = "black", size = 0.8, method = loess) +
+  geom_jitter(data = plot_2, aes(x = Plane_life, y= AVGDepDelay),color = "#FF6666", size = 3) + 
+  labs(title = 'Average Delay against Plane Age', x = 'Plane Age' , y = 'Average Delay') +
+  theme(axis.text = element_text( hjust = 1, vjust = 0.5)) +
+  theme(axis.text.x = element_text(color = "grey20", size = 20),
+        axis.text.y = element_text(color = "grey20", size = 20),
+        axis.title.x = element_text(color = "grey20", size = 20),
+        axis.title.y = element_text(color = "grey20", size = 20)
+  )+theme_minimal()
+
+
+```
+
+
+

@@ -1,0 +1,220 @@
+---
+title: "Question_5.Rmd"
+output: word_document
+date: "2023-03-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message=FALSE)
+
+
+library(datasets)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(plyr)
+library(ggplot2)
+library(purrr)
+library(treemapify)
+library(DBI)
+library(RSQLite)
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(zoo)
+library(pROC)
+library(ROSE)
+library(DMwR2)
+library(caret)
+library(xgboost)
+library(caret)
+```
+## Question 5 :Use the available variables to construct a model that predicts delays.
+
+
+```{r }
+
+# Read Data
+plane_data<-read.csv("D:/R files/plane-data.csv")
+
+conn <- dbConnect(RSQLite::SQLite(), "Coursework_1234.db")
+# read the data from the 'my_table' table into a data.frame
+
+
+# Drop table if it exists
+dbExecute(conn, "DROP TABLE IF EXISTS d39")
+
+
+# read d1 CSV file into d38 table
+d1 <- read.csv("D:/R files/2004.csv")
+dbWriteTable(conn, 'd39', d1, append=FALSE)
+
+# read d2 CSV file into d38 table
+d2 <- read.csv("D:/R files/2005.csv")
+dbWriteTable(conn, 'd39', d2, append=TRUE)
+
+# read d3 CSV file into d38 table
+d3 <- read.csv("D:/R files/2006.csv")
+dbWriteTable(conn, 'd39', d3, append=TRUE)
+
+# remove d1, d2, d3 from memory
+rm(d1, d2, d3)
+
+ 
+df<- dbGetQuery(conn, "
+Select * from d39 where Diverted==0 and Cancelled==0
+")
+
+dbDisconnect(conn)
+
+
+```
+
+```{r echo=FALSE,message=FALSE}
+
+set.seed(1)
+airports<-read.csv("D:/R files/airports.csv")
+
+library(dplyr)
+
+# Get sample of 110,000 data from df Datframe
+sample <- df[sample(nrow(df), 110000, replace = FALSE), ]
+
+#Inner join sample with airports by Origin
+b <- inner_join(sample, airports, by = c("Origin" = "iata"))
+
+# Inner join Airports by Dest
+c <- inner_join(b, airports, by = c("Dest" = "iata"))
+
+
+
+## list numerical features of c dataframe
+numerical_features <- c( "Month", "DayOfWeek", "CRSDepTime", "CRSArrTime", 
+              "CRSElapsedTime", "Distance", "lat.x", "long.x",
+              "lat.y", "long.y")
+
+
+# List Categorical features 
+categorical_features <- c( 'Origin' ,'Dest')
+
+#Scale Data
+data <- c[, numerical_features]
+scaled_data <- scale(data)
+scaled_data<-cbind(scaled_data,c$ArrDelay)
+
+# set name of last column
+scaled_data<-data.frame(scaled_data)
+
+
+# Change the name of the "V11" column to "ArrDelay"
+colnames(scaled_data)[which(names(scaled_data) == "V11")] <- "ArrDelay"
+
+# Make target variable based on Arrival Delay
+#scaled_data<-scaled_data%>%mutate(total_delay=ifelse(scaled_data$ArrDelay>=0,0,1))
+
+
+```
+
+
+```{r `}
+
+# create a data frame with your categorical features
+categorical_data <- c[, categorical_features]
+
+# create dummy variables for each categorical feature
+dummies <- dummyVars(~., data = categorical_data)
+
+# transform the data frame using the dummy variables
+nominal_features <- as.data.frame(predict(dummies, newdata = categorical_data))
+
+model_df<-cbind(scaled_data,nominal_features)
+
+# Make target variable based on Arrival Delay                            
+model_df <- model_df%>%mutate(total_delay = ifelse(model_df$ArrDelay >=0, 1, 0)) 
+
+model_df$total_delay<-as.factor(as.integer(model_df$total_delay))
+#model_df$total_delay <- as.numeric(model_df$total_delay) - 1
+
+# select only the columns you need
+model_df <- subset(model_df, select = -ArrDelay)
+```
+
+## Prepare Model 
+
+```{r echo=FALSE,message=FALSE}
+library(caret)
+set.seed(0)
+
+trainIndex <- createDataPartition(model_df$total_delay, p = 0.8, list = FALSE)
+train <- model_df[trainIndex, ]
+test <- model_df[-trainIndex, ]
+train$total_delay <- as.numeric(train$total_delay) - 1
+test$total_delay <- as.numeric(test$total_delay) - 1
+
+train<- train %>% select(total_delay, everything())
+test <- test%>% select(total_delay, everything())
+
+
+library(caret)
+
+
+
+#Random Forest
+library(randomForest)
+
+
+#define predictor and response variables in training set
+train_x = data.matrix(train[, -1])
+train_y = train[,1]
+
+#define predictor and response variables in testing set
+test_x = data.matrix(test[, -1])
+test_y = test[, 1]
+
+#define final training and testing sets
+xgb_train = xgb.DMatrix(data = train_x, label = train_y)
+xgb_test = xgb.DMatrix(data = test_x, label = test_y)
+
+#define watchlist
+watchlist = list(train=xgb_train, test=xgb_test)
+
+#fit XGBoost model and display training and testing data at each round
+model = xgb.train(data = xgb_train, max.depth = 3, watchlist=watchlist, nrounds = 70)
+#clf <- randomForest(total_delay ~ ., data = train, importance = TRUE, ntree = 500)
+
+#define final model
+final = xgboost(data = xgb_train, max.depth = 3, nrounds = 29, verbose = 0)
+# Importance Matrix
+importance_matrix <- xgb.importance(model = final)
+print(importance_matrix)
+xgb.plot.importance(importance_matrix = importance_matrix)
+
+# Generate predicted labels for the test dataset
+test_pred <- predict(final, newdata = xgb_test)
+
+# Convert predicted labels to binary 0/1 format
+test_pred_binary <- ifelse(test_pred > 0.5, 1, 0)
+
+# Assuming 'test_pred_binary' is a binary vector of predictions
+# and 'test$total_delay' is a binary vector of true labels
+confusionMatrix(factor(test_pred_binary), factor(test$total_delay))
+
+xgb_pred <- predict(xgb_model, as.matrix(test[, 1:592]))
+xgb_prob <- predict(xgb_model, as.matrix(test[, 1:592]), type = "prob")
+xgb_pred<-ifelse(pred >= 0.5, 1, 0)
+# Convert predicted values to factor with same levels as actual values
+xgb_pred <- factor(xgb_pred, levels = levels(test$total_delay))
+
+library(caret)
+
+
+# Assuming 'test_pred_binary' is a binary vector of predictions
+# and 'test$total_delay' is a binary vector of true labels
+confusionMatrix(factor(test_pred_binary), factor(test$total_delay))
+
+                      # Train and evaluate models for each set of hyperparameters
+
+```
+
+
